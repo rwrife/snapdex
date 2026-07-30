@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Snapdex.App/Snapdex.App.csproj" />
+    <Project Path="src/SnapdexCore/SnapdexCore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SnapdexCore.Tests/SnapdexCore.Tests.csproj" />
+  </Folder>
+</Solution>
