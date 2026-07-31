@@ -9,6 +9,13 @@ public sealed class LibraryScanner
             ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp",
             ".cr2", ".cr3", ".nef", ".arw", ".dng", ".rw2", ".orf", ".raf", ".srw");
 
+    private readonly IImageMetadataReader _metadataReader;
+
+    public LibraryScanner(IImageMetadataReader? metadataReader = null)
+    {
+        _metadataReader = metadataReader ?? new MetadataExtractorImageMetadataReader();
+    }
+
     public IEnumerable<ScannedImageFile> Scan(string rootPath)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
@@ -62,11 +69,23 @@ public sealed class LibraryScanner
                 }
 
                 var fileInfo = new FileInfo(filePath);
+                var metadata = _metadataReader.Read(filePath);
+
                 yield return new ScannedImageFile(
                     Path.GetFullPath(filePath),
                     fileInfo.Name,
                     fileInfo.Length,
-                    fileInfo.LastWriteTimeUtc);
+                    fileInfo.LastWriteTimeUtc,
+                    metadata.CameraMake,
+                    metadata.CameraModel,
+                    metadata.LensModel,
+                    metadata.Iso,
+                    metadata.Aperture,
+                    metadata.ShutterSeconds,
+                    metadata.FocalLengthMm,
+                    metadata.CapturedAtUtc,
+                    metadata.GpsLatitude,
+                    metadata.GpsLongitude);
             }
         }
     }
