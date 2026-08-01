@@ -11,7 +11,7 @@ public sealed class LibraryIndexer
         _scanner = scanner ?? new LibraryScanner();
     }
 
-    public int IndexFolder(string rootPath)
+    public int IndexFolder(string rootPath, Action<ScannedImageFile>? onImageIndexed = null)
     {
         using var index = new SqliteImageIndex(_databasePath);
         index.EnsureCreated();
@@ -20,6 +20,7 @@ public sealed class LibraryIndexer
         foreach (var image in _scanner.Scan(rootPath))
         {
             index.UpsertImage(image);
+            onImageIndexed?.Invoke(image);
             indexed++;
         }
 

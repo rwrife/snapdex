@@ -1,4 +1,6 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
+using SnapdexCore.Search;
 
 namespace SnapdexCore.Indexing;
 
@@ -137,6 +139,55 @@ public sealed class SqliteImageIndex : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public IReadOnlyList<IndexedImageRecord> Search(SqliteQueryTranslation translation, int limit = 10000)
+    {
+        ArgumentNullException.ThrowIfNull(translation);
+
+        if (limit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "Search limit must be greater than zero.");
+        }
+
+        var sql = translation.Sql.Trim();
+        if (sql.EndsWith(';'))
+        {
+            sql = sql[..^1];
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"{sql} LIMIT $limit;";
+        command.Parameters.AddWithValue("$limit", limit);
+
+        foreach (var (name, value) in translation.Parameters)
+        {
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        }
+
+        using var reader = command.ExecuteReader();
+        var results = new List<IndexedImageRecord>();
+        while (reader.Read())
+        {
+            results.Add(new IndexedImageRecord(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                ParseUtc(reader.GetString(3)),
+                ParseUtc(reader.GetString(4)),
+                DbString(reader, 5),
+                DbString(reader, 6),
+                DbString(reader, 7),
+                DbInt(reader, 8),
+                DbDouble(reader, 9),
+                DbDouble(reader, 10),
+                DbDouble(reader, 11),
+                DbDateTimeOffset(reader, 12),
+                DbDouble(reader, 13),
+                DbDouble(reader, 14)));
+        }
+
+        return results;
+    }
+
     public int CountImages()
     {
         using var command = _connection.CreateCommand();
@@ -171,6 +222,28 @@ public sealed class SqliteImageIndex : IDisposable
         alterCommand.CommandText = $"ALTER TABLE images ADD COLUMN {columnName} {columnDefinition};";
         alterCommand.ExecuteNonQuery();
     }
+
+    private static string? DbString(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+
+    private static int? DbInt(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+
+    private static double? DbDouble(SqliteDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
+
+    private static DateTimeOffset? DbDateTimeOffset(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        return ParseUtc(reader.GetString(ordinal));
+    }
+
+    private static DateTimeOffset ParseUtc(string value)
+        => DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
     private static object DbValue(string? value) => value is null ? DBNull.Value : value;
 
