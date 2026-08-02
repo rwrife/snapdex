@@ -5,7 +5,8 @@ namespace SnapdexCore.Indexing;
 public sealed class LibraryScanner
 {
     private static readonly ImmutableHashSet<string> SupportedExtensions =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
             ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp",
             ".cr2", ".cr3", ".nef", ".arw", ".dng", ".rw2", ".orf", ".raf", ".srw");
 
@@ -62,31 +63,60 @@ public sealed class LibraryScanner
 
             foreach (var filePath in files)
             {
-                var extension = Path.GetExtension(filePath);
-                if (!SupportedExtensions.Contains(extension))
+                if (TryScanFile(filePath, out var scannedImage) && scannedImage is not null)
                 {
-                    continue;
+                    yield return scannedImage;
                 }
-
-                var fileInfo = new FileInfo(filePath);
-                var metadata = _metadataReader.Read(filePath);
-
-                yield return new ScannedImageFile(
-                    Path.GetFullPath(filePath),
-                    fileInfo.Name,
-                    fileInfo.Length,
-                    fileInfo.LastWriteTimeUtc,
-                    metadata.CameraMake,
-                    metadata.CameraModel,
-                    metadata.LensModel,
-                    metadata.Iso,
-                    metadata.Aperture,
-                    metadata.ShutterSeconds,
-                    metadata.FocalLengthMm,
-                    metadata.CapturedAtUtc,
-                    metadata.GpsLatitude,
-                    metadata.GpsLongitude);
             }
         }
+    }
+
+    public bool TryScanFile(string filePath, out ScannedImageFile? scannedImage)
+    {
+        scannedImage = null;
+
+        if (string.IsNullOrWhiteSpace(filePath) || !IsSupportedImagePath(filePath) || !File.Exists(filePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            var metadata = _metadataReader.Read(fileInfo.FullName);
+
+            scannedImage = new ScannedImageFile(
+                fileInfo.FullName,
+                fileInfo.Name,
+                fileInfo.Length,
+                fileInfo.LastWriteTimeUtc,
+                metadata.CameraMake,
+                metadata.CameraModel,
+                metadata.LensModel,
+                metadata.Iso,
+                metadata.Aperture,
+                metadata.ShutterSeconds,
+                metadata.FocalLengthMm,
+                metadata.CapturedAtUtc,
+                metadata.GpsLatitude,
+                metadata.GpsLongitude);
+
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsSupportedImagePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(filePath);
+        return SupportedExtensions.Contains(extension);
     }
 }

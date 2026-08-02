@@ -16,6 +16,8 @@ public partial class MainWindow : Window
     private readonly SqliteQueryTranslator _queryTranslator = new();
     private readonly DispatcherTimer _queryDebounceTimer;
     private readonly ObservableCollection<SearchResultRow> _results = new();
+    private readonly IncrementalIndexingService _incrementalIndexingService;
+    private readonly string _picturesFolder;
 
     private bool _isRefreshing;
     private bool _isIndexing;
@@ -31,6 +33,11 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(250)
         };
         _queryDebounceTimer.Tick += QueryDebounceTimer_OnTick;
+
+        _incrementalIndexingService = new IncrementalIndexingService(_databasePath);
+        _picturesFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+
+        Closed += MainWindow_OnClosed;
     }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
@@ -42,6 +49,7 @@ public partial class MainWindow : Window
             index.EnsureCreated();
         }
 
+        await InitializeIncrementalIndexingAsync();
         await RefreshResultsAsync();
     }
 
@@ -74,8 +82,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var picturesFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-        if (string.IsNullOrWhiteSpace(picturesFolder) || !Directory.Exists(picturesFolder))
+        if (!IsPicturesFolderAvailable())
         {
             StatusText.Text = "Could not locate the Pictures folder for this user.";
             return;
@@ -85,17 +92,20 @@ public partial class MainWindow : Window
         ToggleUiEnabled(false);
         try
         {
-            StatusText.Text = $"Indexing {picturesFolder} ...";
+            StatusText.Text = $"Indexing {_picturesFolder} ...";
 
             var indexed = await Task.Run(() =>
             {
                 var indexer = new LibraryIndexer(_databasePath);
                 return indexer.IndexFolder(
-                    picturesFolder,
+                    _picturesFolder,
                     image => _thumbnailCache.GetOrCreate(image.Path, image.ModifiedTimeUtc));
             });
 
-            StatusText.Text = $"Indexed {indexed} image(s) from {picturesFolder}.";
+            _incrementalIndexingService.StartWatching(new[] { _picturesFolder });
+
+            StatusText.Text =
+                $"Indexed {indexed} image(s) from {_picturesFolder}. Live incremental indexing is now active.";
         }
         catch (Exception ex)
         {
@@ -122,6 +132,10 @@ public partial class MainWindow : Window
 
         try
         {
+            await Task.Run(() =>
+                _incrementalIndexingService.FlushPendingChanges(
+                    image => _thumbnailCache.GetOrCreate(image.Path, image.ModifiedTimeUtc)));
+
             var queryText = QueryTextBox.Text;
 
             var parsed = _queryParser.Parse(queryText);
@@ -197,6 +211,47 @@ public partial class MainWindow : Window
         {
             StatusText.Text = $"Failed to open image: {ex.Message}";
         }
+    }
+
+    private async Task InitializeIncrementalIndexingAsync()
+    {
+        if (!IsPicturesFolderAvailable())
+        {
+            return;
+        }
+
+        var hasExistingIndex = await Task.Run(() =>
+        {
+            using var index = new SqliteImageIndex(_databasePath);
+            index.EnsureCreated();
+            return index.CountImages() > 0;
+        });
+
+        _incrementalIndexingService.StartWatching(new[] { _picturesFolder });
+
+        if (!hasExistingIndex)
+        {
+            StatusText.Text = "Ready. Incremental watcher is active for the Pictures folder.";
+            return;
+        }
+
+        StatusText.Text = "Reconciling index with filesystem changes...";
+
+        var sync = await Task.Run(() =>
+            _incrementalIndexingService.ReconcileFolders(
+                new[] { _picturesFolder },
+                image => _thumbnailCache.GetOrCreate(image.Path, image.ModifiedTimeUtc)));
+
+        StatusText.Text =
+            $"Reconciled {sync.ScannedCount} image(s): {sync.UpsertedCount} upserted, {sync.DeletedCount} removed. Watching for live changes.";
+    }
+
+    private bool IsPicturesFolderAvailable()
+        => !string.IsNullOrWhiteSpace(_picturesFolder) && Directory.Exists(_picturesFolder);
+
+    private void MainWindow_OnClosed(object? sender, EventArgs e)
+    {
+        _incrementalIndexingService.Dispose();
     }
 
     private void ToggleUiEnabled(bool enabled)
