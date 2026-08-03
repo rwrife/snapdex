@@ -19,6 +19,13 @@ public enum NumericComparisonOperator
     LessThanOrEqual
 }
 
+public enum VisualQueryKind
+{
+    None,
+    Text,
+    SimilarImage
+}
+
 public abstract record QueryFilter;
 
 public sealed record TextFilter(QueryField Field, string Value) : QueryFilter;
@@ -29,7 +36,9 @@ public sealed record DateRangeFilter(DateOnly StartDate, DateOnly EndDate) : Que
 
 public sealed record SearchQuery(
     bool IsVisualQuery,
+    VisualQueryKind VisualQueryKind,
     string? VisualQueryText,
+    string? VisualSimilarPath,
     IReadOnlyList<QueryFilter> Filters);
 
 public sealed record SearchQueryParseResult(
@@ -46,4 +55,6 @@ public sealed record SqliteQueryTranslation(
     string Sql,
     IReadOnlyDictionary<string, object?> Parameters,
     bool IsVisualQuery,
-    string? VisualQueryText);
+    VisualQueryKind VisualQueryKind,
+    string? VisualQueryText,
+    string? VisualSimilarPath);

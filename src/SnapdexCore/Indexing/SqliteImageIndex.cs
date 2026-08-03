@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SnapdexCore.Search;
 
@@ -6,6 +7,7 @@ namespace SnapdexCore.Indexing;
 
 public sealed class SqliteImageIndex : IDisposable
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SqliteConnection _connection;
 
     public SqliteImageIndex(string databasePath)
@@ -62,6 +64,23 @@ public sealed class SqliteImageIndex : IDisposable
         EnsureColumnExists("captured_at", "TEXT NULL");
         EnsureColumnExists("gps_latitude", "REAL NULL");
         EnsureColumnExists("gps_longitude", "REAL NULL");
+
+        using var embeddingsCommand = _connection.CreateCommand();
+        embeddingsCommand.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS image_embeddings (
+                path TEXT NOT NULL,
+                model TEXT NOT NULL,
+                source_size INTEGER NOT NULL,
+                source_mtime TEXT NOT NULL,
+                embedding_json TEXT NOT NULL,
+                indexed_at TEXT NOT NULL,
+                PRIMARY KEY (path, model)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_image_embeddings_model ON image_embeddings(model);
+            """;
+        embeddingsCommand.ExecuteNonQuery();
     }
 
     public void UpsertImage(ScannedImageFile image)
@@ -139,6 +158,110 @@ public sealed class SqliteImageIndex : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public void UpsertImageEmbedding(
+        string imagePath,
+        string model,
+        long sourceSize,
+        DateTimeOffset sourceModifiedTimeUtc,
+        IReadOnlyList<float> vector)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath)
+            || string.IsNullOrWhiteSpace(model)
+            || vector is null
+            || vector.Count == 0)
+        {
+            return;
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO image_embeddings (
+                path,
+                model,
+                source_size,
+                source_mtime,
+                embedding_json,
+                indexed_at
+            )
+            VALUES (
+                $path,
+                $model,
+                $sourceSize,
+                $sourceMtime,
+                $embeddingJson,
+                $indexedAt
+            )
+            ON CONFLICT(path, model) DO UPDATE SET
+                source_size = excluded.source_size,
+                source_mtime = excluded.source_mtime,
+                embedding_json = excluded.embedding_json,
+                indexed_at = excluded.indexed_at;
+            """;
+
+        command.Parameters.AddWithValue("$path", Path.GetFullPath(imagePath));
+        command.Parameters.AddWithValue("$model", model.Trim());
+        command.Parameters.AddWithValue("$sourceSize", sourceSize);
+        command.Parameters.AddWithValue("$sourceMtime", sourceModifiedTimeUtc.UtcDateTime.ToString("O"));
+        command.Parameters.AddWithValue("$embeddingJson", JsonSerializer.Serialize(vector, JsonOptions));
+        command.Parameters.AddWithValue("$indexedAt", DateTimeOffset.UtcNow.UtcDateTime.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public CachedImageEmbedding? GetImageEmbedding(string imagePath, string model)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath) || string.IsNullOrWhiteSpace(model))
+        {
+            return null;
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT path, model, source_size, source_mtime, embedding_json, indexed_at
+            FROM image_embeddings
+            WHERE path = $path AND model = $model;
+            """;
+        command.Parameters.AddWithValue("$path", Path.GetFullPath(imagePath));
+        command.Parameters.AddWithValue("$model", model.Trim());
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return ReadCachedEmbedding(reader);
+    }
+
+    public IReadOnlyDictionary<string, CachedImageEmbedding> GetImageEmbeddingsByModel(string model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return new Dictionary<string, CachedImageEmbedding>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT path, model, source_size, source_mtime, embedding_json, indexed_at
+            FROM image_embeddings
+            WHERE model = $model;
+            """;
+        command.Parameters.AddWithValue("$model", model.Trim());
+
+        using var reader = command.ExecuteReader();
+        var result = new Dictionary<string, CachedImageEmbedding>(StringComparer.OrdinalIgnoreCase);
+
+        while (reader.Read())
+        {
+            var embedding = ReadCachedEmbedding(reader);
+            result[embedding.Path] = embedding;
+        }
+
+        return result;
+    }
+
     public IReadOnlyList<IndexedImageRecord> Search(SqliteQueryTranslation translation, int limit = 10000)
     {
         ArgumentNullException.ThrowIfNull(translation);
@@ -213,8 +336,23 @@ public sealed class SqliteImageIndex : IDisposable
             return 0;
         }
 
+        DeleteImageEmbeddingsByPath(imagePath);
+
         using var command = _connection.CreateCommand();
         command.CommandText = "DELETE FROM images WHERE path = $path;";
+        command.Parameters.AddWithValue("$path", Path.GetFullPath(imagePath));
+        return command.ExecuteNonQuery();
+    }
+
+    public int DeleteImageEmbeddingsByPath(string imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            return 0;
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = "DELETE FROM image_embeddings WHERE path = $path;";
         command.Parameters.AddWithValue("$path", Path.GetFullPath(imagePath));
         return command.ExecuteNonQuery();
     }
@@ -252,6 +390,19 @@ public sealed class SqliteImageIndex : IDisposable
         using var alterCommand = _connection.CreateCommand();
         alterCommand.CommandText = $"ALTER TABLE images ADD COLUMN {columnName} {columnDefinition};";
         alterCommand.ExecuteNonQuery();
+    }
+
+    private static CachedImageEmbedding ReadCachedEmbedding(SqliteDataReader reader)
+    {
+        var path = reader.GetString(0);
+        var model = reader.GetString(1);
+        var sourceSize = reader.GetInt64(2);
+        var sourceMtime = ParseUtc(reader.GetString(3));
+        var embeddingJson = reader.GetString(4);
+        var indexedAt = ParseUtc(reader.GetString(5));
+
+        var vector = JsonSerializer.Deserialize<float[]>(embeddingJson, JsonOptions) ?? Array.Empty<float>();
+        return new CachedImageEmbedding(path, model, sourceSize, sourceMtime, vector, indexedAt);
     }
 
     private static string? DbString(SqliteDataReader reader, int ordinal)

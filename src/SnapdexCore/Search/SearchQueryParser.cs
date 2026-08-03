@@ -9,7 +9,8 @@ public sealed class SearchQueryParser
     {
         if (string.IsNullOrWhiteSpace(input))
         {
-            return SearchQueryParseResult.Ok(new SearchQuery(false, null, Array.Empty<QueryFilter>()));
+            return SearchQueryParseResult.Ok(
+                new SearchQuery(false, VisualQueryKind.None, null, null, Array.Empty<QueryFilter>()));
         }
 
         var tokenization = Tokenize(input);
@@ -27,8 +28,9 @@ public sealed class SearchQueryParser
             return SearchQueryParseResult.Fail(parseVisual.Error!);
         }
 
-        var isVisual = parseVisual.IsVisualQuery;
+        var visualKind = parseVisual.VisualQueryKind;
         var visualText = parseVisual.VisualQueryText;
+        string? visualSimilarPath = null;
         var startIndex = parseVisual.NextTokenIndex;
 
         for (var i = startIndex; i < tokens.Count; i++)
@@ -124,12 +126,36 @@ public sealed class SearchQueryParser
                     filters.Add(new DateRangeFilter(parsed.StartDate!.Value, parsed.EndDate!.Value));
                     break;
                 }
+                case "similar":
+                {
+                    if (visualKind != VisualQueryKind.None)
+                    {
+                        return SearchQueryParseResult.Fail("Cannot combine '~ \"...\"' visual text queries with 'similar:<path>' in the same query.");
+                    }
+
+                    var parsed = ParseTextValue(rawValue);
+                    if (!parsed.Success)
+                    {
+                        return SearchQueryParseResult.Fail(parsed.Error!);
+                    }
+
+                    visualKind = VisualQueryKind.SimilarImage;
+                    visualSimilarPath = parsed.Value;
+                    break;
+                }
                 default:
-                    return SearchQueryParseResult.Fail($"Unknown filter key '{key}'. Supported keys: camera, lens, iso, f, folder, date.");
+                    return SearchQueryParseResult.Fail("Unknown filter key '" + key + "'. Supported keys: camera, lens, iso, f, folder, date, similar.");
             }
         }
 
-        return SearchQueryParseResult.Ok(new SearchQuery(isVisual, visualText, filters));
+        var isVisual = visualKind != VisualQueryKind.None;
+
+        return SearchQueryParseResult.Ok(new SearchQuery(
+            isVisual,
+            visualKind,
+            visualText,
+            visualSimilarPath,
+            filters));
     }
 
     private static TokenizationResult Tokenize(string input)
@@ -178,7 +204,7 @@ public sealed class SearchQueryParser
     {
         if (tokens.Count == 0)
         {
-            return VisualPrefixResult.Ok(false, null, 0);
+            return VisualPrefixResult.Ok(VisualQueryKind.None, null, 0);
         }
 
         if (tokens[0] == "~")
@@ -194,12 +220,12 @@ public sealed class SearchQueryParser
                 return VisualPrefixResult.Fail(parsed.Error!);
             }
 
-            return VisualPrefixResult.Ok(true, parsed.Value, 2);
+            return VisualPrefixResult.Ok(VisualQueryKind.Text, parsed.Value, 2);
         }
 
         if (!tokens[0].StartsWith('~'))
         {
-            return VisualPrefixResult.Ok(false, null, 0);
+            return VisualPrefixResult.Ok(VisualQueryKind.None, null, 0);
         }
 
         var inlineVisual = tokens[0][1..].TrimStart();
@@ -214,7 +240,7 @@ public sealed class SearchQueryParser
             return VisualPrefixResult.Fail(parsedInline.Error!);
         }
 
-        return VisualPrefixResult.Ok(true, parsedInline.Value, 1);
+        return VisualPrefixResult.Ok(VisualQueryKind.Text, parsedInline.Value, 1);
     }
 
     private static TextParseResult ParseTextValue(string token, bool requireQuoted = false)
@@ -357,13 +383,13 @@ public sealed class SearchQueryParser
         public static TokenizationResult Fail(string error) => new(false, null, error);
     }
 
-    private sealed record VisualPrefixResult(bool Success, bool IsVisualQuery, string? VisualQueryText, int NextTokenIndex, string? Error)
+    private sealed record VisualPrefixResult(bool Success, VisualQueryKind VisualQueryKind, string? VisualQueryText, int NextTokenIndex, string? Error)
     {
-        public static VisualPrefixResult Ok(bool isVisualQuery, string? visualQueryText, int nextTokenIndex)
-            => new(true, isVisualQuery, visualQueryText, nextTokenIndex, null);
+        public static VisualPrefixResult Ok(VisualQueryKind visualQueryKind, string? visualQueryText, int nextTokenIndex)
+            => new(true, visualQueryKind, visualQueryText, nextTokenIndex, null);
 
         public static VisualPrefixResult Fail(string error)
-            => new(false, false, null, 0, error);
+            => new(false, VisualQueryKind.None, null, 0, error);
     }
 
     private sealed record TextParseResult(bool Success, string? Value, string? Error)
