@@ -188,6 +188,37 @@ public sealed class SqliteImageIndex : IDisposable
         return results;
     }
 
+    public IReadOnlyDictionary<string, IndexedImageState> GetIndexedImageStates()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT path, size, mtime FROM images;";
+
+        using var reader = command.ExecuteReader();
+        var states = new Dictionary<string, IndexedImageState>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+        {
+            var path = reader.GetString(0);
+            var size = reader.GetInt64(1);
+            var modified = ParseUtc(reader.GetString(2));
+            states[path] = new IndexedImageState(path, size, modified);
+        }
+
+        return states;
+    }
+
+    public int DeleteImageByPath(string imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            return 0;
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = "DELETE FROM images WHERE path = $path;";
+        command.Parameters.AddWithValue("$path", Path.GetFullPath(imagePath));
+        return command.ExecuteNonQuery();
+    }
+
     public int CountImages()
     {
         using var command = _connection.CreateCommand();
