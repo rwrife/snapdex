@@ -16,7 +16,9 @@ public class QueryLanguageTests
         var query = Assert.IsType<SearchQuery>(result.Query);
 
         Assert.False(query.IsVisualQuery);
+        Assert.Equal(VisualQueryKind.None, query.VisualQueryKind);
         Assert.Null(query.VisualQueryText);
+        Assert.Null(query.VisualSimilarPath);
         Assert.Equal(7, query.Filters.Count);
 
         Assert.Equal(new TextFilter(QueryField.Camera, "Canon EOS R6"), query.Filters[0]);
@@ -37,9 +39,36 @@ public class QueryLanguageTests
         var query = Assert.IsType<SearchQuery>(result.Query);
 
         Assert.True(query.IsVisualQuery);
+        Assert.Equal(VisualQueryKind.Text, query.VisualQueryKind);
         Assert.Equal("golden retriever in snow", query.VisualQueryText);
+        Assert.Null(query.VisualSimilarPath);
         Assert.Single(query.Filters);
         Assert.Equal(new TextFilter(QueryField.Camera, "Canon"), query.Filters[0]);
+    }
+
+    [Fact]
+    public void Parse_SimilarPath_IsParsedAndFlagged()
+    {
+        var result = _parser.Parse("similar:\"C:\\Users\\you\\Pictures\\IMG_2043.jpg\" camera:Canon");
+
+        Assert.True(result.Success, result.Error);
+        var query = Assert.IsType<SearchQuery>(result.Query);
+
+        Assert.True(query.IsVisualQuery);
+        Assert.Equal(VisualQueryKind.SimilarImage, query.VisualQueryKind);
+        Assert.Null(query.VisualQueryText);
+        Assert.Equal("C:\\Users\\you\\Pictures\\IMG_2043.jpg", query.VisualSimilarPath);
+        Assert.Single(query.Filters);
+        Assert.Equal(new TextFilter(QueryField.Camera, "Canon"), query.Filters[0]);
+    }
+
+    [Fact]
+    public void Parse_CannotCombineVisualTextAndSimilarPath()
+    {
+        var result = _parser.Parse("~ \"sunset\" similar:C:\\img.jpg");
+
+        Assert.False(result.Success);
+        Assert.Contains("Cannot combine", result.Error);
     }
 
     [Fact]
@@ -119,6 +148,22 @@ public class QueryLanguageTests
         var translation = _translator.Translate(parse.Query!);
 
         Assert.True(translation.IsVisualQuery);
+        Assert.Equal(VisualQueryKind.Text, translation.VisualQueryKind);
         Assert.Equal("whiteboard notes", translation.VisualQueryText);
+        Assert.Null(translation.VisualSimilarPath);
+    }
+
+    [Fact]
+    public void Translate_PreservesVisualSimilarPath()
+    {
+        var parse = _parser.Parse("similar:C:\\pics\\a.jpg lens:Sigma");
+        Assert.True(parse.Success, parse.Error);
+
+        var translation = _translator.Translate(parse.Query!);
+
+        Assert.True(translation.IsVisualQuery);
+        Assert.Equal(VisualQueryKind.SimilarImage, translation.VisualQueryKind);
+        Assert.Equal("C:\\pics\\a.jpg", translation.VisualSimilarPath);
+        Assert.Null(translation.VisualQueryText);
     }
 }

@@ -42,7 +42,13 @@ public sealed class SqliteQueryTranslator
 
         sql.Append(" ORDER BY captured_at DESC, filename ASC;");
 
-        return new SqliteQueryTranslation(sql.ToString(), parameters, query.IsVisualQuery, query.VisualQueryText);
+        return new SqliteQueryTranslation(
+            sql.ToString(),
+            parameters,
+            query.IsVisualQuery,
+            query.VisualQueryKind,
+            query.VisualQueryText,
+            query.VisualSimilarPath);
     }
 
     private static void AddTextFilter(TextFilter filter, List<string> conditions, Dictionary<string, object?> parameters)

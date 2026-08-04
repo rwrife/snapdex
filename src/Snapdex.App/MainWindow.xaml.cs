@@ -1,9 +1,12 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using SnapdexCore.Indexing;
+using SnapdexCore.LocalAi;
 using SnapdexCore.Search;
 
 namespace Snapdex.App;
@@ -18,6 +21,12 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<SearchResultRow> _results = new();
     private readonly IncrementalIndexingService _incrementalIndexingService;
     private readonly string _picturesFolder;
+
+    private readonly LocalAiSettingsStore _localAiSettingsStore = new(AppPaths.LocalAiSettingsPath);
+    private readonly OpenAiCompatibleEmbeddingClient _embeddingClient = new();
+    private readonly VisualSearchService _visualSearchService;
+
+    private LocalAiSettings _localAiSettings;
 
     private bool _isRefreshing;
     private bool _isIndexing;
@@ -36,6 +45,11 @@ public partial class MainWindow : Window
 
         _incrementalIndexingService = new IncrementalIndexingService(_databasePath);
         _picturesFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        _visualSearchService = new VisualSearchService(_embeddingClient);
+
+        _localAiSettings = _localAiSettingsStore.Load().Normalize();
+        LocalAiEndpointTextBox.Text = _localAiSettings.EndpointUrl;
+        LocalAiModelTextBox.Text = _localAiSettings.Model;
 
         Closed += MainWindow_OnClosed;
     }
@@ -120,6 +134,42 @@ public partial class MainWindow : Window
         await RefreshResultsAsync();
     }
 
+    private async void SaveLocalAiSettingsButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _localAiSettings = ReadLocalAiSettingsFromInputs().Normalize();
+            _localAiSettingsStore.Save(_localAiSettings);
+            StatusText.Text = $"Saved Local-AI settings (endpoint={_localAiSettings.EndpointUrl}, model={_localAiSettings.Model}).";
+
+            if (!string.IsNullOrWhiteSpace(QueryTextBox.Text))
+            {
+                await RefreshResultsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Failed to save Local-AI settings: {ex.Message}";
+        }
+    }
+
+    private async void CheckLocalAiHealthButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        var settings = ReadLocalAiSettingsFromInputs().Normalize();
+        if (!settings.IsConfigured)
+        {
+            StatusText.Text = "Local-AI settings are incomplete. Provide endpoint URL and model.";
+            return;
+        }
+
+        StatusText.Text = "Checking Local-AI endpoint...";
+
+        var health = await _embeddingClient.CheckHealthAsync(settings);
+        StatusText.Text = health.IsHealthy
+            ? $"Local-AI healthy: {health.Message}"
+            : $"Local-AI unavailable: {health.Message}";
+    }
+
     private async Task RefreshResultsAsync()
     {
         if (_isRefreshing)
@@ -147,22 +197,23 @@ public partial class MainWindow : Window
             }
 
             var translation = _queryTranslator.Translate(parsed.Query!);
+            var localAiSettings = GetConfiguredLocalAiSettings();
 
-            var rows = await Task.Run(() =>
+            var searchResult = await Task.Run(async () =>
             {
                 using var index = new SqliteImageIndex(_databasePath);
                 index.EnsureCreated();
-
-                var records = index.Search(translation, limit: 20000);
-                return records
-                    .Select(record => new SearchResultRow
-                    {
-                        Record = record,
-                        DisplayPath = record.Path,
-                        ThumbnailPath = _thumbnailCache.GetOrCreate(record.Path, record.ModifiedTimeUtc)
-                    })
-                    .ToList();
+                return await _visualSearchService.SearchAsync(index, translation, localAiSettings, limit: 20000);
             });
+
+            var rows = searchResult.Records
+                .Select(record => new SearchResultRow
+                {
+                    Record = record,
+                    DisplayPath = record.Path,
+                    ThumbnailPath = _thumbnailCache.GetOrCreate(record.Path, record.ModifiedTimeUtc)
+                })
+                .ToList();
 
             _results.Clear();
             foreach (var row in rows)
@@ -170,10 +221,13 @@ public partial class MainWindow : Window
                 _results.Add(row);
             }
 
-            if (parsed.Query!.IsVisualQuery)
+            if (searchResult.UsedVisualRanking)
             {
-                StatusText.Text =
-                    $"Showing {_results.Count} metadata result(s). Visual ranking is not enabled yet; query text parsed as '{parsed.Query.VisualQueryText}'.";
+                StatusText.Text = $"Showing {_results.Count} visual result(s). {searchResult.Notice}";
+            }
+            else if (parsed.Query!.IsVisualQuery)
+            {
+                StatusText.Text = $"Showing {_results.Count} metadata result(s). {searchResult.Notice}";
             }
             else
             {
@@ -246,17 +300,36 @@ public partial class MainWindow : Window
             $"Reconciled {sync.ScannedCount} image(s): {sync.UpsertedCount} upserted, {sync.DeletedCount} removed. Watching for live changes.";
     }
 
+    private LocalAiSettings? GetConfiguredLocalAiSettings()
+    {
+        var settings = _localAiSettings.Normalize();
+        return settings.IsConfigured ? settings : null;
+    }
+
+    private LocalAiSettings ReadLocalAiSettingsFromInputs()
+    {
+        var endpoint = LocalAiEndpointTextBox.Text?.Trim() ?? string.Empty;
+        var model = LocalAiModelTextBox.Text?.Trim() ?? string.Empty;
+
+        return new LocalAiSettings(endpoint, model);
+    }
+
     private bool IsPicturesFolderAvailable()
         => !string.IsNullOrWhiteSpace(_picturesFolder) && Directory.Exists(_picturesFolder);
 
     private void MainWindow_OnClosed(object? sender, EventArgs e)
     {
         _incrementalIndexingService.Dispose();
+        _embeddingClient.Dispose();
     }
 
     private void ToggleUiEnabled(bool enabled)
     {
         QueryTextBox.IsEnabled = enabled;
         ResultsGrid.IsEnabled = enabled;
+        LocalAiEndpointTextBox.IsEnabled = enabled;
+        LocalAiModelTextBox.IsEnabled = enabled;
+        SaveLocalAiSettingsButton.IsEnabled = enabled;
+        CheckLocalAiHealthButton.IsEnabled = enabled;
     }
 }

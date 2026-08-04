@@ -81,13 +81,17 @@ locally.
 
 - **Endpoint:** any OpenAI-compatible server on `localhost`, e.g.
   [Ollama](https://ollama.com) or [llama.cpp](https://github.com/ggerganov/llama.cpp).
-- **Suggested tiny models:** CLIP-class image embedders, or vision models such as
-  the **MiniCPM-V** family for captioning/embedding. Small enough to run on a
-  laptop; quantized GGUF supported via llama.cpp.
-- **How it's used:** snapdex computes and caches an embedding per image, then
-  ranks results by cosine similarity to your text/query embedding.
+  Configure this in the app's **Local AI** settings row (`Endpoint`, `Model`) and
+  use **Check AI** to verify health before running visual queries.
+- **Suggested tiny models:**
+  - CLIP-family embedders available through your local stack
+  - `nomic-embed-text` for lightweight text embedding (Ollama)
+  - MiniCPM-V family variants for local vision workflows (llama.cpp / Ollama)
+- **How it's used:** snapdex caches per-image embeddings in SQLite and reuses
+  them until the source image changes, then recomputes. Visual queries (`~ "..."`
+  and `similar:<path>`) are ranked by cosine similarity.
 - **Privacy:** No network calls leave `localhost`. If no endpoint is configured
-  or reachable, snapdex silently falls back to metadata-only search.
+  or reachable, snapdex falls back to metadata-only search without blocking.
 
 ## Current status / milestones
 
