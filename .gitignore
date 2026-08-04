@@ -4,5 +4,6 @@ obj/
 *.user
 *.suo
 TestResults/
+artifacts/
 *.db-shm
 *.db-wal
