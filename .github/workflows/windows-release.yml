@@ -1,0 +1,43 @@
+name: windows-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  package-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build portable win-x64 artifact
+        shell: pwsh
+        run: ./scripts/windows/build-portable.ps1 -Configuration Release -RuntimeIdentifier win-x64 -SelfContained
+
+      - name: Build MSIX artifact
+        shell: pwsh
+        run: ./scripts/windows/build-msix.ps1 -Configuration Release -Platform x64
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapdex-portable-win-x64
+          path: artifacts/portable/win-x64
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapdex-msix
+          path: artifacts/msix/**/*.msix

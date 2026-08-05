@@ -42,18 +42,68 @@ experience **fully offline**, on hardware you control.
 
 ## How to use (Windows-first quickstart)
 
-> Requires Windows 10/11 and the .NET 8 runtime.
+> Requires Windows 10/11.
 
-1. Download the latest release (portable `.exe` / MSIX — see Milestones) or build
-   from source:
+1. Install snapdex using either:
+   - **Portable build** (no installer): extract the `snapdex-portable-win-x64` artifact,
+     then run `Snapdex.App.exe`.
+   - **MSIX installer**: install the `.msix` package and launch **snapdex** from the
+     Start menu.
+2. If you are building from source, run:
    ```powershell
    git clone https://github.com/rwrife/snapdex.git
    cd snapdex
    dotnet build -c Release
    ```
-2. Launch snapdex and add one or more photo folders (e.g., `C:\Users\you\Pictures`).
-3. Let it index — progress is shown live; the index is incremental thereafter.
-4. Search from the box at the top. Examples below.
+3. Launch snapdex and add one or more photo folders (e.g., `C:\Users\you\Pictures`).
+4. Let it index — progress is shown live; the index is incremental thereafter.
+5. Search from the box at the top. Examples below.
+
+## Windows packaging / release artifacts
+
+### Portable self-contained folder
+
+From repo root on Windows:
+
+```powershell
+./scripts/windows/build-portable.ps1 -Configuration Release -RuntimeIdentifier win-x64 -SelfContained
+```
+
+This produces a runnable folder at `artifacts/portable/win-x64/`.
+
+Equivalent raw command:
+
+```powershell
+dotnet publish src/Snapdex.App/Snapdex.App.csproj -c Release -r win-x64 --self-contained true -o artifacts/portable/win-x64
+```
+
+### MSIX installer package
+
+From repo root on Windows:
+
+```powershell
+./scripts/windows/build-msix.ps1 -Configuration Release -Platform x64
+```
+
+This uses the Desktop Bridge project at `packaging/Snapdex.Package/` and writes
+an MSIX package under `artifacts/msix/`.
+
+Local sideload install (Developer Mode):
+
+```powershell
+Add-AppxPackage -Path .\artifacts\msix\<package>.msix -AllowUnsigned
+```
+
+### Uninstall/data retention behavior
+
+Uninstalling the MSIX package removes the installed app binaries. snapdex stores
+its local index/cache/settings under:
+
+- `%LocalAppData%\snapdex\snapdex.db`
+- `%LocalAppData%\snapdex\thumb-cache\`
+- `%LocalAppData%\snapdex\local-ai-settings.json`
+
+If you want a full cleanup, delete `%LocalAppData%\snapdex\` after uninstall.
 
 ## Example workflow / commands
 
